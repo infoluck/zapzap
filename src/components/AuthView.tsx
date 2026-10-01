@@ -108,6 +108,8 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, verifiedSta
       await authApi.register(email.trim(), password);
       setMode('check-email');
     } catch (err) {
+      // Account exists but the e-mail failed: send the user to the screen that has "Reenviar link"
+      if (err instanceof AuthError && err.code === 'EMAIL_SEND_FAILED') setMode('check-email');
       setError(err instanceof Error ? err.message : 'Falha ao cadastrar.');
     } finally {
       setLoading(false);

@@ -25,6 +25,9 @@ import {
 } from 'lucide-react';
 import { WhatsAppSession, GatewayConfig, GatewayProvider } from '../types';
 import { whatsappGatewayService } from '../lib/whatsappGateway';
+import { ConnectionSettings, ConnectionInfo } from './ConnectionSettings';
+
+export type { ConnectionInfo };
 
 interface ConnectionViewProps {
   session: WhatsAppSession;
@@ -34,8 +37,10 @@ interface ConnectionViewProps {
   onSyncWhatsAppContacts?: () => Promise<{ count: number; message: string }>;
   onNavigateToProfiles?: () => void;
   onUpdateSession: (session: WhatsAppSession) => void;
-  /** false when the admin has not set up the shared Evolution server yet */
-  serverConfigured?: boolean;
+  /** this user's own Evolution connection (null while loading) */
+  connection: ConnectionInfo | null;
+  /** reloads the connection after the user saved or removed it */
+  onConnectionChanged: () => void | Promise<void>;
 }
 
 export const ConnectionView: React.FC<ConnectionViewProps> = ({
@@ -46,8 +51,11 @@ export const ConnectionView: React.FC<ConnectionViewProps> = ({
   onSyncWhatsAppContacts,
   onNavigateToProfiles,
   onUpdateSession,
-  serverConfigured = true,
+  connection,
+  onConnectionChanged,
 }) => {
+  const [showSettings, setShowSettings] = useState(false);
+  const configured = Boolean(connection?.configured);
   const [connectMethod, setConnectMethod] = useState<'qr' | 'pairing_code'>('qr');
   
   // Gateway config is managed by the server (derived per user); keep a synced copy
@@ -406,23 +414,70 @@ export const ConnectionView: React.FC<ConnectionViewProps> = ({
               </button>
             )}
 
+            {configured && (
+              <button
+                id="btn-toggle-settings-gateway"
+                onClick={() => setShowSettings((v) => !v)}
+                className={`inline-flex items-center justify-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition cursor-pointer ${
+                  showSettings
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                {showSettings ? 'Voltar para Conexão' : 'Configurar conexão'}
+              </button>
+            )}
           </div>
         </div>
       </div>
 
 
       {/* Main Connection Screen (QR Code / Pairing Code) */}
-      {!serverConfigured && (
-        <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-sm text-amber-900 flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-          <span>
-            O servidor de WhatsApp ainda não foi configurado pelo administrador. Assim que ele concluir a configuração,
-            você poderá gerar o QR Code aqui.
-          </span>
-        </div>
+      {/* Settings form: shown automatically for accounts that have no connection yet */}
+      {connection && (!configured || showSettings) && (
+        <>
+          {!configured && (
+            <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-sm text-amber-900 flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                Configure abaixo a sua conexão com a Evolution API (URL, nome da instância e chave). Depois você poderá
+                gerar o QR Code e conectar o seu WhatsApp.
+              </span>
+            </div>
+          )}
+          <ConnectionSettings
+            connection={connection}
+            onCancel={() => setShowSettings(false)}
+            onChanged={async (kind) => {
+              await onConnectionChanged();
+              setShowSettings(false);
+              if (kind === 'cleared') {
+                // No connection left: nothing can be "connected" anymore
+                setQrCodeDataUri('');
+                setReceivedPairingCode(null);
+                onUpdateSession({
+                  status: 'disconnected',
+                  qrCodeData: null,
+                  pairingCode: null,
+                  phoneNumber: null,
+                  pushName: null,
+                  platform: 'WhatsApp Web',
+                  batteryLevel: 0,
+                  connectedAt: null,
+                  instanceId: '',
+                  gatewayProvider: 'evolution',
+                });
+              } else {
+                // The saved connection may point to another server/instance: re-read the real status
+                setTimeout(() => checkRealConnection(true), 0);
+              }
+            }}
+          />
+        </>
       )}
 
-      {serverConfigured && (
+      {configured && !showSettings && (
         <>
           {session.status === 'connected' ? (
             /* Connected View Dashboard */

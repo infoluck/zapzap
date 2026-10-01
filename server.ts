@@ -3,7 +3,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { getDb } from './src/db/index';
-import { registerAuthRoutes, requireAuth } from './src/server/auth';
+import { registerAuthRoutes, requireAuth, verifyMailerOnStartup } from './src/server/auth';
 import { registerEvolutionRoutes, claimLegacyData } from './src/server/evolution';
 import { isAdminEmail } from './src/server/admin';
 
@@ -483,6 +483,11 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+    // Self-check written to the logs: makes deploy problems (SMTP/DB) visible without guessing
+    verifyMailerOnStartup();
+    db.$queryRaw`SELECT 1`
+      .then(() => console.log('✅ Banco de dados ok'))
+      .catch((err: any) => console.error(`⛔ Banco de dados indisponível: code=${err?.code ?? '-'} msg=${err?.message}`));
   });
 }
 

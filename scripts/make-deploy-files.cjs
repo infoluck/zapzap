@@ -71,8 +71,6 @@ SMTP_USER="${pick('SMTP_USER')}"
 SMTP_PASS="${pick('SMTP_PASS')}"
 SMTP_FROM="${pick('SMTP_FROM')}"
 
-EVOLUTION_BASE_URL="${pick('EVOLUTION_BASE_URL')}"
-EVOLUTION_GLOBAL_API_KEY="${pick('EVOLUTION_GLOBAL_API_KEY')}"
 `;
 
 fs.writeFileSync(sqlFile, sql);
@@ -81,4 +79,3 @@ console.log('✅ Gerados (segredos não exibidos):');
 console.log('   deploy/setup-db.local.sql');
 console.log('   deploy/easypanel.env.local');
 console.log(`   senha do banco: ${dbPassword.length} caracteres | JWT_SECRET: ${jwtSecret.length} caracteres`);
-console.log(`   EVOLUTION_GLOBAL_API_KEY ${pick('EVOLUTION_GLOBAL_API_KEY') ? 'copiada do .env' : 'VAZIA no .env (preencher)'}`);
