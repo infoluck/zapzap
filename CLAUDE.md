@@ -15,7 +15,7 @@ ZapZap ("WhatsApp Connect & Disparos") is a multi-tenant WhatsApp CRM and bulk-s
 - `npm run start:prod` — what the Docker container runs: db-guard → `prisma migrate deploy` → server.
 - Deploy (Easypanel, same flow as rcloud/menuluck): only `main` is deployed. Each push to `main` runs `.github/workflows/docker-release.yml`: lint → push `infoluck/image:zapzap-latest` + `zapzap-<VERSION>` → POST the Easypanel webhook (`vars.DEPLOY_PROD_URL`). Manual equivalent: `.\build.ps1 -Release -Deploy` (webhook URL from local `.env`). Production env template: `node scripts/make-deploy-files.cjs` → `deploy/` (gitignored).
 
-Config comes from `.env` (see `.env.example`): `DATABASE_URL`, `APP_URL`, `JWT_SECRET`, `SMTP_*`, `ADMIN_EMAILS`, `EVOLUTION_BASE_URL`, `EVOLUTION_GLOBAL_API_KEY`. Without `SMTP_HOST`, dev prints the email-verification link to the server console.
+Config comes from `.env` (see `.env.example`): `DATABASE_URL`, `APP_URL`, `JWT_SECRET`, `SMTP_*`, `ADMIN_EMAILS` (optional: `ALLOW_PRIVATE_EVOLUTION_HOSTS`). There are no Evolution variables: each user saves their own connection in the app. Without `SMTP_HOST`, dev prints the email-verification link to the server console.
 
 ## Database safety (production Postgres is shared with other databases)
 
@@ -28,7 +28,7 @@ Config comes from `.env` (see `.env.example`): `DATABASE_URL`, `APP_URL`, `JWT_S
 **Backend** (`server.ts` + `src/server/`): one Express app.
 - `src/server/auth.ts` — register / verify email / login. JWT in an httpOnly cookie, bcrypt passwords. `requireAuth` is mounted on all of `/api`, except `/api/auth/*` and `/api/health`.
 - Multi-tenancy: every data table has `user_id` and a composite PK `(user_id, id)` (`prisma/schema.prisma`). Every route in `server.ts` must filter by `uid(req)`. New users start with no data. Legacy rows with `user_id = ''` go to the admin on their first login.
-- `src/server/evolution.ts` — one shared Evolution API server; each user gets their own instance (`u<id>`, token stored in `users.evo_instance_token`), created lazily by `ensureInstance`. `POST /api/whatsapp-proxy` takes only a path from the browser. The server injects the host and the user's token and ignores any client-supplied apikey, host or headers. It blocks `/instance/create|all|delete`. The global key never reaches the browser.
+- `src/server/evolution.ts` — Evolution API connection **per user**: the user saves server URL, instance name and API key in the Conexão screen (`ConnectionSettings.tsx`); stored in `app_settings` (`whatsapp_connection`) with the key AES-256-GCM encrypted (`secretBox.ts`). New accounts start blank. `POST /api/whatsapp-proxy` takes only a path from the browser; the server injects the user's saved host and key, ignores any client-supplied apikey/host/headers, uses `redirect: 'manual'`, blocks `/instance/create|all|delete`, and refuses private/loopback hosts (SSRF guard `assertPublicHost`). The key is never returned in full.
 - `src/server/admin.ts` — admin users = `ADMIN_EMAILS`; they get the Administração tab (`AdminView.tsx`).
 - Prisma client singleton: `getDb()` in `src/db/index.ts`.
 - The `whatsappProxyPlugin` in `vite.config.ts` is a legacy unauthenticated proxy. In dev, the Express route registered before the Vite middleware handles the request instead.

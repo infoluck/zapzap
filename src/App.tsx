@@ -27,6 +27,7 @@ import { MassSenderView } from './components/MassSenderView';
 import { HistoryView } from './components/HistoryView';
 import { AuthView } from './components/AuthView';
 import { AdminView } from './components/AdminView';
+import type { ConnectionInfo } from './components/ConnectionView';
 import { authApi, installAuthInterceptor, AUTH_EXPIRED_EVENT, AuthUser } from './lib/auth';
 import { Loader2 } from 'lucide-react';
 
@@ -61,7 +62,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   // The Evolution server, its keys and this user's instance are managed by the backend.
   // The browser only holds placeholders: the proxy replaces host and credentials server-side.
   const [gatewayConfig, setGatewayConfig] = useState<GatewayConfig>(MANAGED_GATEWAY);
-  const [serverConfigured, setServerConfigured] = useState<boolean>(true);
+  const [connection, setConnection] = useState<ConnectionInfo | null>(null); // null = still loading
   const [chats, setChats] = useState<WhatsAppChat[]>(() => storage.getChats());
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(() => storage.getMessages());
   const [profiles, setProfiles] = useState<ContactProfile[]>(() => storage.getProfiles());
@@ -90,15 +91,20 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const messagesRef = useRef(messages);
 
   // Per-user WhatsApp info (instance name / whether the admin configured the server)
+  const refreshConnection = async () => {
+    try {
+      const r = await fetch('/api/whatsapp/config');
+      if (!r.ok) return;
+      const info: ConnectionInfo = await r.json();
+      setConnection(info);
+      setGatewayConfig((g) => ({ ...g, instanceName: info.instanceName }));
+    } catch {
+      // keeps the previous state
+    }
+  };
+
   useEffect(() => {
-    fetch('/api/whatsapp/config')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((info) => {
-        if (!info) return;
-        setGatewayConfig((g) => ({ ...g, instanceName: info.instanceName || g.instanceName }));
-        setServerConfigured(Boolean(info.serverConfigured));
-      })
-      .catch(() => {});
+    refreshConnection();
   }, []);
 
   // Load state from PostgreSQL on mount. The database is the source of truth:
@@ -438,7 +444,8 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
             onSyncWhatsAppContacts={handleSyncWhatsAppContacts}
             onNavigateToProfiles={() => setActiveTab('perfis')}
             onUpdateSession={handleUpdateSession}
-            serverConfigured={serverConfigured}
+            connection={connection}
+            onConnectionChanged={refreshConnection}
           />
         )}
 
