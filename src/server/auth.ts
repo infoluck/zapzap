@@ -91,17 +91,52 @@ function getTransporter() {
   return transporter;
 }
 
+class EmailDeliveryError extends Error {}
+
+const EMAIL_FAILED_MSG =
+  'Sua conta foi criada, mas não conseguimos enviar o e-mail de confirmação agora. Tente "Reenviar link" em alguns minutos ou avise o administrador.';
+
+/** Logs the real reason (SMTP code, server answer) so it shows up in the container logs. */
+function logMailError(context: string, err: any) {
+  console.error(
+    `📧 Falha de e-mail (${context}): code=${err?.code ?? '-'} command=${err?.command ?? '-'} responseCode=${err?.responseCode ?? '-'} msg=${err?.message}`
+  );
+}
+
+/** Called once at startup: checks the SMTP login and writes the result to the log. */
+export async function verifyMailerOnStartup() {
+  const tx = getTransporter();
+  if (!tx) {
+    const msg = 'SMTP_HOST não definido: e-mails de confirmação NÃO serão enviados.';
+    isProd ? console.error(`⛔ ${msg}`) : console.warn(`⚠️ ${msg} (em dev o link aparece no console)`);
+    return;
+  }
+  try {
+    await Promise.race([
+      tx.verify(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout de 15s ao conectar no SMTP')), 15000)),
+    ]);
+    console.log(`✅ SMTP ok: ${process.env.SMTP_HOST}:${process.env.SMTP_PORT || 587} (usuário ${process.env.SMTP_USER || 'sem login'})`);
+  } catch (err: any) {
+    logMailError(`verificação no início, host ${process.env.SMTP_HOST}:${process.env.SMTP_PORT || 587}`, err);
+  }
+}
+
 async function sendVerificationEmail(to: string, rawToken: string) {
   const link = `${appUrl()}/api/auth/verify?token=${rawToken}`;
   const tx = getTransporter();
 
   if (!tx) {
-    if (isProd) throw new Error('SMTP não configurado: não é possível enviar o e-mail de confirmação.');
+    if (isProd) {
+      console.error('⛔ SMTP_HOST não definido: impossível enviar o e-mail de confirmação.');
+      throw new EmailDeliveryError('SMTP não configurado');
+    }
     console.log(`\n📧 [DEV] SMTP não configurado. Link de confirmação para ${to}:\n   ${link}\n`);
     return;
   }
 
-  await tx.sendMail({
+  try {
+    await tx.sendMail({
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to,
     subject: 'Confirme seu e-mail — WhatsApp Connect & Disparos',
@@ -116,7 +151,11 @@ async function sendVerificationEmail(to: string, rawToken: string) {
         <p style="font-size:13px;color:#6b7280">O link vale por ${VERIFY_HOURS} horas. Se o botão não funcionar, copie e cole este endereço no navegador:<br>${link}</p>
         <p style="font-size:13px;color:#6b7280">Se você não criou esta conta, ignore este e-mail.</p>
       </div>`,
-  });
+    });
+  } catch (err: any) {
+    logMailError(`envio para ${to}`, err);
+    throw new EmailDeliveryError(err?.message);
+  }
 }
 
 async function issueVerification(userId: string, email: string) {
@@ -186,7 +225,10 @@ export function registerAuthRoutes(app: Express) {
       await issueVerification(user.id, email);
       res.json({ success: true, message: GENERIC_REGISTER_MSG });
     } catch (err: any) {
-      console.error('Error registering user:', err);
+      if (err instanceof EmailDeliveryError) {
+        return res.status(502).json({ code: 'EMAIL_SEND_FAILED', error: EMAIL_FAILED_MSG });
+      }
+      console.error(`Error registering user: code=${err?.code ?? '-'} name=${err?.name} msg=${err?.message}`);
       res.status(500).json({ error: 'Não foi possível concluir o cadastro. Tente novamente.' });
     }
   });
@@ -199,8 +241,11 @@ export function registerAuthRoutes(app: Express) {
         if (user && !user.emailVerified) await issueVerification(user.id, email);
       }
       res.json({ success: true, message: 'Se existir uma conta pendente para este e-mail, reenviamos o link.' });
-    } catch (err) {
-      console.error('Error resending verification:', err);
+    } catch (err: any) {
+      if (err instanceof EmailDeliveryError) {
+        return res.status(502).json({ code: 'EMAIL_SEND_FAILED', error: EMAIL_FAILED_MSG });
+      }
+      console.error(`Error resending verification: code=${err?.code ?? '-'} msg=${err?.message}`);
       res.status(500).json({ error: 'Não foi possível reenviar o e-mail. Tente novamente.' });
     }
   });
