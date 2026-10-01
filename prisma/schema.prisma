@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Todas as tabelas de dados pertencem a um usuário (userId). A chave primária é composta
+// (userId, id): dois usuários podem ter o mesmo chat/contato (ex.: mesmo número) sem colisão.
+// Linhas legadas (anteriores ao multiusuário) ficam com userId = "" até o administrador assumi-las.
+
+model Profile {
+  userId      String   @default("") @map("user_id")
+  id          String
+  name        String
+  description String?  @default("")
+  color       String?  @default("#0284c7")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([userId, id])
+  @@map("contact_profiles")
+}
+
+model Contact {
+  userId     String   @default("") @map("user_id")
+  id         String
+  name       String
+  phone      String
+  profileIds Json     @default("[]") @map("profile_ids")
+  notes      String?  @default("")
+  customData Json?    @default("{}") @map("custom_data")
+  addedAt    DateTime @default(now()) @map("added_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([userId, id])
+  @@map("contacts")
+}
+
+model Template {
+  userId    String   @default("") @map("user_id")
+  id        String
+  title     String
+  content   String
+  category  String?  @default("Geral")
+  tags      Json?    @default("[]")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([userId, id])
+  @@map("message_templates")
+}
+
+model Chat {
+  userId               String   @default("") @map("user_id")
+  id                   String
+  name                 String
+  phone                String
+  pushName             String?  @map("push_name")
+  about                String?
+  jid                  String?
+  avatarUrl            String?  @map("avatar_url")
+  lastMessage          String?  @map("last_message")
+  lastMessageTimestamp String?  @map("last_message_timestamp")
+  unreadCount          Int?     @default(0) @map("unread_count")
+  contactId            String?  @map("contact_id")
+  profileIds           Json?    @default("[]") @map("profile_ids")
+  isGroup              Boolean? @default(false) @map("is_group")
+  isPinned             Boolean? @default(false) @map("is_pinned")
+  pinIndex             Int?     @default(0) @map("pin_index")
+  isDisappearing       Boolean? @default(false) @map("is_disappearing")
+  isMuted              Boolean? @default(false) @map("is_muted")
+  labels               Json?    @default("[]")
+  updatedAt            DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([userId, id])
+  @@map("chats")
+}
+
+model ChatMessage {
+  userId    String   @default("") @map("user_id")
+  id        String
+  chatId    String   @map("chat_id")
+  sender    String
+  text      String
+  status    String?  @default("sent")
+  error     String?
+  timestamp DateTime @default(now()) @db.Timestamptz(6)
+
+  @@id([userId, id])
+  @@index([userId, chatId])
+  @@map("chat_messages")
+}
+
+model Campaign {
+  userId              String    @default("") @map("user_id")
+  id                  String
+  name                String
+  targetProfileId     String    @map("target_profile_id")
+  selectedTemplateIds Json      @map("selected_template_ids")
+  scheduledFor        DateTime? @map("scheduled_for") @db.Timestamptz(6)
+  status              String
+  totalContacts       Int?      @default(0) @map("total_contacts")
+  sentCount           Int?      @default(0) @map("sent_count")
+  failedCount         Int?      @default(0) @map("failed_count")
+  antiBanSettings     Json      @map("anti_ban_settings")
+  logs                Json      @default("[]")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([userId, id])
+  @@map("campaigns")
+}
+
+model AppSetting {
+  userId    String   @default("") @map("user_id")
+  key       String
+  value     Json
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@id([userId, key])
+  @@map("app_settings")
+}
+
+model User {
+  id                 String    @id
+  email              String    @unique
+  passwordHash       String    @map("password_hash")
+  emailVerified      Boolean   @default(false) @map("email_verified")
+  verifyTokenHash    String?   @unique @map("verify_token_hash")
+  verifyTokenExpires DateTime? @map("verify_token_expires") @db.Timestamptz(6)
+  // Instância do WhatsApp deste usuário no servidor Evolution (criada sob demanda)
+  evoInstanceName    String?   @unique @map("evo_instance_name")
+  evoInstanceToken   String?   @map("evo_instance_token")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("users")
+}

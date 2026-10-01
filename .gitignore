@@ -1,0 +1,59 @@
+# ============================================================
+# Segredos e configuração local (NUNCA versionar)
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Arquivos de deploy: contêm senhas, JWT_SECRET e dados pessoais (contatos)
+deploy/
+*.local
+*.local.*
+
+# Backups e dumps do banco
+backups/
+*.sql
+*.dump
+*.sqlite
+*.sqlite-journal
+# ...exceto as migrations do Prisma, que fazem parte do código
+!prisma/migrations/**/migration.sql
+
+# ============================================================
+# Dependências e build
+# ============================================================
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.tsbuildinfo
+.prisma/
+
+# ============================================================
+# Logs
+# ============================================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============================================================
+# Sistema operacional e editores
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# ============================================================
+# Ferramentas
+# ============================================================
+.claude/settings.local.json

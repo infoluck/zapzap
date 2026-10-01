@@ -1,0 +1,8 @@
+{
+  "name": "WhatsApp Connect & Disparos",
+  "description": "Conexão web com WhatsApp, gerenciamento e vínculo de perfis de contatos com filtro, cadastro de templates e disparos em massa com mesclagem anti-bloqueio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
