@@ -49,13 +49,24 @@ function isPrivateIp(ip: string): boolean {
   return v.startsWith('fe80') || v.startsWith('fc') || v.startsWith('fd');
 }
 
+/** Hosts the admin explicitly trusts even if they are internal (EVOLUTION_TRUSTED_HOSTS="evolution:8080,outro.host"). */
+function isTrustedHost(url: URL): boolean {
+  return (process.env.EVOLUTION_TRUSTED_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+    .some((h) => h === url.host.toLowerCase() || h === url.hostname.toLowerCase());
+}
+
 /**
  * Users type the server address, so the backend must never be turned into a way to reach
- * internal services (localhost, private networks, cloud metadata). Set
- * ALLOW_PRIVATE_EVOLUTION_HOSTS=true only for a trusted single-tenant setup.
+ * internal services (localhost, private networks, cloud metadata). Exceptions are explicit:
+ * EVOLUTION_TRUSTED_HOSTS (specific hosts) or ALLOW_PRIVATE_EVOLUTION_HOSTS=true (everything,
+ * only for a trusted single-tenant setup).
  */
 async function assertPublicHost(baseUrl: string): Promise<void> {
   if (process.env.ALLOW_PRIVATE_EVOLUTION_HOSTS === 'true') return;
+  if (isTrustedHost(new URL(baseUrl))) return;
   const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
   let addrs: { address: string }[];
   try {
@@ -65,6 +76,40 @@ async function assertPublicHost(baseUrl: string): Promise<void> {
   }
   if (addrs.length === 0 || addrs.some((a) => isPrivateIp(a.address))) {
     throw new EvolutionError('Esse endereço aponta para uma rede interna e não é permitido. Use o endereço público do servidor.');
+  }
+}
+
+/**
+ * Node's fetch only says "fetch failed"; the real reason is in err.cause. This turns it into a message
+ * the user can act on, and logs the technical detail for the admin.
+ */
+function describeFetchError(err: any, target?: string): string {
+  const cause = err?.cause ?? err;
+  const code: string = cause?.code || err?.code || (err?.name === 'TimeoutError' || err?.name === 'AbortError' ? 'TIMEOUT' : '');
+  console.error(`🌐 Falha ao acessar a Evolution${target ? ` (${target})` : ''}: code=${code || '-'} msg=${cause?.message || err?.message}`);
+  switch (code) {
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return 'O servidor do aplicativo não conseguiu resolver (DNS) o endereço informado. Confira a URL.';
+    case 'ECONNREFUSED':
+      return 'Conexão recusada: o endereço ou a porta estão errados, ou o serviço da Evolution está parado.';
+    case 'ETIMEDOUT':
+    case 'UND_ERR_CONNECT_TIMEOUT':
+    case 'TIMEOUT':
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH':
+      return 'Tempo esgotado: o servidor do aplicativo não alcança esse endereço. Se a Evolution está no mesmo servidor do app, o endereço público pode não ser acessível de dentro; peça ao administrador para usar o endereço interno.';
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'CERT_HAS_EXPIRED':
+    case 'ERR_TLS_CERT_ALTNAME_INVALID':
+      return 'O certificado SSL do servidor é inválido ou expirou.';
+    case 'ECONNRESET':
+    case 'UND_ERR_SOCKET':
+      return 'A conexão foi interrompida pelo servidor. Confira se a URL usa http ou https corretamente.';
+    default:
+      return `Servidor inacessível: ${cause?.message || err?.message || 'falha de rede'}${code ? ` (${code})` : ''}`;
   }
 }
 
@@ -268,7 +313,7 @@ export function registerEvolutionRoutes(app: Express) {
       }
     } catch (err: any) {
       result.reachable = false;
-      result.message = `Servidor inacessível: ${err?.message || err}`;
+      result.message = describeFetchError(err, baseUrl);
     }
     res.json(result);
   });
@@ -345,8 +390,7 @@ export function registerEvolutionRoutes(app: Express) {
       }
       return res.json({ status: apiRes.status, contentType, text: await apiRes.text() });
     } catch (err: any) {
-      console.error('WhatsApp proxy error:', err);
-      return res.status(502).json({ error: err.message || 'Failed to communicate with WhatsApp gateway' });
+      return envelope(res, 503, describeFetchError(err));
     }
   });
 
