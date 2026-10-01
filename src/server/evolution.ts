@@ -9,11 +9,55 @@ import { requireAdmin } from './admin';
  *  - EVOLUTION_GLOBAL_API_KEY  chave admin (cria instâncias). NUNCA vai ao navegador.
  * Cada usuário tem a sua própria instância/sessão de WhatsApp, acessada com um token próprio.
  */
-export function evolutionBaseUrl(): string {
-  return (process.env.EVOLUTION_BASE_URL || '').trim().replace(/\/+$/, '');
+import { encryptSecret, decryptSecret } from './secretBox';
+
+type ServerConfig = { baseUrl: string; globalKey: string; source: 'database' | 'env' | 'none' };
+
+// Server-wide settings live in app_settings under a reserved owner no user can ever have
+const GLOBAL_OWNER = '__global__';
+const SETTING_KEY = 'evolution_server';
+const cleanUrl = (v: string) => v.trim().replace(/\/+$/, '');
+
+let configCache: { value: ServerConfig; at: number } | null = null;
+const invalidateConfig = () => {
+  configCache = null;
+};
+
+/** Config saved by the admin in the database wins; the .env variables are the default. */
+export async function getServerConfig(): Promise<ServerConfig> {
+  if (configCache && Date.now() - configCache.at < 30_000) return configCache.value;
+
+  const row = await getDb().appSetting.findUnique({
+    where: { userId_key: { userId: GLOBAL_OWNER, key: SETTING_KEY } },
+  });
+  const saved = row?.value as any;
+  let value: ServerConfig;
+  if (saved?.baseUrl) {
+    let key = '';
+    try {
+      key = saved.globalKeyEnc ? decryptSecret(saved.globalKeyEnc) : '';
+    } catch {
+      console.error('⚠️ Não foi possível decifrar a chave global salva (JWT_SECRET mudou?). Salve-a de novo na Administração.');
+    }
+    value = { baseUrl: cleanUrl(saved.baseUrl), globalKey: key, source: 'database' };
+  } else {
+    const baseUrl = cleanUrl(process.env.EVOLUTION_BASE_URL || '');
+    const key = (process.env.EVOLUTION_GLOBAL_API_KEY || '').trim();
+    value = { baseUrl, globalKey: key, source: baseUrl || key ? 'env' : 'none' };
+  }
+  configCache = { value, at: Date.now() };
+  return value;
 }
-function globalKey(): string {
-  return (process.env.EVOLUTION_GLOBAL_API_KEY || '').trim();
+
+/** Accepts only http(s) URLs without embedded credentials. Returns the cleaned URL or null. */
+function parseBaseUrl(input: unknown): string | null {
+  try {
+    const u = new URL(String(input ?? '').trim());
+    if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) return null;
+    return cleanUrl(u.origin + (u.pathname === '/' ? '' : u.pathname));
+  } catch {
+    return null;
+  }
 }
 
 class EvolutionError extends Error {}
@@ -33,8 +77,7 @@ export async function ensureInstance(userId: string): Promise<Instance> {
   const pending = inflight.get(userId);
   if (pending) return pending;
 
-  const base = evolutionBaseUrl();
-  const key = globalKey();
+  const { baseUrl: base, globalKey: key } = await getServerConfig();
   if (!base || !key) {
     throw new EvolutionError('O servidor de WhatsApp ainda não foi configurado pelo administrador.');
   }
@@ -129,7 +172,10 @@ export function registerEvolutionRoutes(app: Express) {
     res.json({
       provider: 'evolution',
       instanceName: user?.evoInstanceName || '',
-      serverConfigured: Boolean(evolutionBaseUrl() && (globalKey() || user?.evoInstanceToken)),
+      serverConfigured: await (async () => {
+        const cfg = await getServerConfig();
+        return Boolean(cfg.baseUrl && (cfg.globalKey || user?.evoInstanceToken));
+      })(),
     });
   });
 
@@ -140,7 +186,7 @@ export function registerEvolutionRoutes(app: Express) {
       const { url, method = 'GET', payload } = req.body || {};
       if (!url || typeof url !== 'string') return res.status(400).json({ error: 'URL is required' });
 
-      const base = evolutionBaseUrl();
+      const base = (await getServerConfig()).baseUrl;
       if (!base) return envelope(res, 503, 'O servidor de WhatsApp ainda não foi configurado pelo administrador.');
 
       let path: string;
@@ -207,22 +253,71 @@ export function registerEvolutionRoutes(app: Express) {
   });
 
   // ---------- Admin area ----------
-  app.get('/api/admin/evolution', requireAdmin, (req, res) => {
-    const key = globalKey();
+  const keyHint = (key: string) => (key ? `••••${key.slice(-4)}` : '');
+
+  app.get('/api/admin/evolution', requireAdmin, async (req, res) => {
+    const cfg = await getServerConfig();
+    const me = await db.user.findUnique({ where: { id: userId(req) } });
     res.json({
-      baseUrl: evolutionBaseUrl(),
-      hasGlobalKey: Boolean(key),
-      globalKeyHint: key ? `${key.slice(0, 4)}…${key.slice(-4)}` : '',
+      baseUrl: cfg.baseUrl,
+      hasGlobalKey: Boolean(cfg.globalKey),
+      globalKeyHint: keyHint(cfg.globalKey),
+      source: cfg.source,
+      myInstanceName: me?.evoInstanceName || '',
     });
   });
 
+  // Save server address and global key. A blank key keeps the one already saved.
+  app.put('/api/admin/evolution', requireAdmin, async (req, res) => {
+    const baseUrl = parseBaseUrl(req.body?.baseUrl);
+    if (!baseUrl) return res.status(400).json({ error: 'Informe um endereço válido (http:// ou https://).' });
+
+    const newKey = String(req.body?.globalApiKey ?? '').trim();
+    let encrypted: string | undefined;
+    if (newKey) {
+      if (/^https?:\/\//i.test(newKey)) {
+        return res.status(400).json({ error: 'A chave informada parece ser uma URL. Cole a chave de API.' });
+      }
+      encrypted = encryptSecret(newKey);
+    } else {
+      const current = await db.appSetting.findUnique({
+        where: { userId_key: { userId: GLOBAL_OWNER, key: SETTING_KEY } },
+      });
+      encrypted = (current?.value as any)?.globalKeyEnc;
+    }
+    if (!encrypted) return res.status(400).json({ error: 'Informe a chave global (API Key) do servidor.' });
+
+    const value = { baseUrl, globalKeyEnc: encrypted };
+    await db.appSetting.upsert({
+      where: { userId_key: { userId: GLOBAL_OWNER, key: SETTING_KEY } },
+      create: { userId: GLOBAL_OWNER, key: SETTING_KEY, value },
+      update: { value, updatedAt: new Date() },
+    });
+    invalidateConfig();
+    res.json({ success: true });
+  });
+
+  // Drop the saved config and go back to the .env defaults
+  app.delete('/api/admin/evolution', requireAdmin, async (req, res) => {
+    await db.appSetting.deleteMany({ where: { userId: GLOBAL_OWNER, key: SETTING_KEY } });
+    invalidateConfig();
+    res.json({ success: true });
+  });
+
+  // Tests the values typed in the form (or, if blank, the ones currently in use) without saving
   app.post('/api/admin/evolution/test', requireAdmin, async (req, res) => {
-    const base = evolutionBaseUrl();
-    const key = globalKey();
-    if (!base) return res.json({ reachable: false, keyValid: false, message: 'EVOLUTION_BASE_URL não definido no .env.' });
+    const current = await getServerConfig();
+    const typedUrl = String(req.body?.baseUrl ?? '').trim();
+    const base = typedUrl ? parseBaseUrl(typedUrl) : current.baseUrl;
+    const key = String(req.body?.globalApiKey ?? '').trim() || current.globalKey;
     const result = { reachable: false, keyValid: false, message: '' };
+
+    if (!base) {
+      result.message = typedUrl ? 'Endereço inválido (use http:// ou https://).' : 'Endereço do servidor não definido.';
+      return res.json(result);
+    }
     try {
-      const ok = await fetch(`${base}/server/ok`);
+      const ok = await fetch(`${base}/server/ok`, { signal: AbortSignal.timeout(15000) });
       result.reachable = ok.ok;
       if (!ok.ok) result.message = `Servidor respondeu HTTP ${ok.status}.`;
     } catch (err: any) {
@@ -230,11 +325,11 @@ export function registerEvolutionRoutes(app: Express) {
       return res.json(result);
     }
     if (!key) {
-      result.message = result.message || 'EVOLUTION_GLOBAL_API_KEY não definida no .env.';
+      result.message = result.message || 'Chave global não informada.';
       return res.json(result);
     }
     try {
-      const all = await fetch(`${base}/instance/all`, { headers: { apikey: key } });
+      const all = await fetch(`${base}/instance/all`, { headers: { apikey: key }, signal: AbortSignal.timeout(15000) });
       result.keyValid = all.ok;
       result.message =
         result.message ||
