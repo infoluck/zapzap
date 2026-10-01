@@ -18,7 +18,8 @@ if (fs.existsSync(sqlFile) || fs.existsSync(envFile)) {
   process.exit(1);
 }
 
-const dev = dotenv.parse(fs.readFileSync(path.join(root, '.env')));
+const devEnvFile = path.join(root, '.env');
+const dev = fs.existsSync(devEnvFile) ? dotenv.parse(fs.readFileSync(devEnvFile)) : {};
 const dbPassword = crypto.randomBytes(24).toString('base64url'); // só [A-Za-z0-9_-]: seguro em URL
 const jwtSecret = crypto.randomBytes(48).toString('hex');
 
