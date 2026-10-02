@@ -49,6 +49,15 @@ function isPrivateIp(ip: string): boolean {
   return v.startsWith('fe80') || v.startsWith('fc') || v.startsWith('fd');
 }
 
+/**
+ * Server URL set by the administrator in EVOLUTION_BASE_URL. When present it is used for EVERY user
+ * (users only provide instance name + key). Because users can't choose the host, it may be an internal
+ * address (e.g. http://projeto_evolution:8080) without any SSRF risk.
+ */
+function serverUrl(): string | null {
+  return parseBaseUrl(process.env.EVOLUTION_BASE_URL);
+}
+
 /** Hosts the admin explicitly trusts even if they are internal (EVOLUTION_TRUSTED_HOSTS="evolution:8080,outro.host"). */
 function isTrustedHost(url: URL): boolean {
   return (process.env.EVOLUTION_TRUSTED_HOSTS || '')
@@ -66,6 +75,7 @@ function isTrustedHost(url: URL): boolean {
  */
 async function assertPublicHost(baseUrl: string): Promise<void> {
   if (process.env.ALLOW_PRIVATE_EVOLUTION_HOSTS === 'true') return;
+  if (serverUrl() && baseUrl === serverUrl()) return; // chosen by the admin, not by a user
   if (isTrustedHost(new URL(baseUrl))) return;
   const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
   let addrs: { address: string }[];
@@ -118,9 +128,10 @@ export async function loadConnection(userId: string): Promise<Connection | null>
   const db = getDb();
   const row = await db.appSetting.findUnique({ where: { userId_key: { userId, key: SETTING_KEY } } });
   const v = row?.value as any;
-  if (v?.baseUrl && v?.instanceName && v?.apiKeyEnc) {
+  const baseUrl = serverUrl() || v?.baseUrl;
+  if (baseUrl && v?.instanceName && v?.apiKeyEnc) {
     try {
-      return { baseUrl: v.baseUrl, instanceName: v.instanceName, apiKey: decryptSecret(v.apiKeyEnc) };
+      return { baseUrl, instanceName: v.instanceName, apiKey: decryptSecret(v.apiKeyEnc) };
     } catch {
       console.error(`⚠️ Não foi possível decifrar a chave da conexão do usuário ${userId} (JWT_SECRET mudou?).`);
       return null;
@@ -152,7 +163,11 @@ async function legacyInstanceName(userId: string): Promise<string> {
 }
 
 async function saveConnection(userId: string, c: Connection): Promise<void> {
-  const value = { baseUrl: c.baseUrl, instanceName: c.instanceName, apiKeyEnc: encryptSecret(c.apiKey) };
+  const value = {
+    baseUrl: serverUrl() ? '' : c.baseUrl, // with EVOLUTION_BASE_URL the URL is never stored per user
+    instanceName: c.instanceName,
+    apiKeyEnc: encryptSecret(c.apiKey),
+  };
   await getDb().appSetting.upsert({
     where: { userId_key: { userId, key: SETTING_KEY } },
     create: { userId, key: SETTING_KEY, value },
@@ -177,8 +192,8 @@ export async function claimLegacyData(adminId: string): Promise<void> {
     }
 
     const legacyGateway = legacySettings.find((s) => s.key === 'gateway_config')?.value as any;
-    if (legacyGateway?.baseUrl && legacyGateway?.instanceName && legacyGateway?.apiKey && !(await loadConnection(adminId))) {
-      const baseUrl = parseBaseUrl(legacyGateway.baseUrl);
+    if (legacyGateway?.instanceName && legacyGateway?.apiKey && !(await loadConnection(adminId))) {
+      const baseUrl = serverUrl() || parseBaseUrl(legacyGateway.baseUrl);
       if (baseUrl) {
         await saveConnection(adminId, {
           baseUrl,
@@ -221,7 +236,9 @@ export function registerEvolutionRoutes(app: Express) {
     res.json({
       provider: 'evolution',
       configured: Boolean(conn),
-      baseUrl: conn?.baseUrl || '',
+      // true: the URL comes from the server's .env; users don't see or type it
+      serverManaged: Boolean(serverUrl()),
+      baseUrl: serverUrl() ? '' : conn?.baseUrl || '',
       instanceName: conn?.instanceName || (await legacyInstanceName(userId(req))),
       hasApiKey: Boolean(conn),
       apiKeyHint: keyHint(conn?.apiKey || ''),
@@ -231,7 +248,7 @@ export function registerEvolutionRoutes(app: Express) {
   // A blank apiKey keeps the one already saved
   app.put('/api/whatsapp/settings', async (req, res) => {
     const uid = userId(req);
-    const baseUrl = parseBaseUrl(req.body?.baseUrl);
+    const baseUrl = serverUrl() || parseBaseUrl(req.body?.baseUrl);
     if (!baseUrl) return res.status(400).json({ error: 'Informe uma URL válida (http:// ou https://).' });
 
     const instanceName = String(req.body?.instanceName ?? '').trim();
@@ -264,14 +281,16 @@ export function registerEvolutionRoutes(app: Express) {
   // Tests the typed values (or, for blank fields, the saved ones) without saving
   app.post('/api/whatsapp/settings/test', async (req, res) => {
     const saved = await loadConnection(userId(req));
-    const typedUrl = String(req.body?.baseUrl ?? '').trim();
-    const baseUrl = typedUrl ? parseBaseUrl(typedUrl) : saved?.baseUrl || null;
+    const typedUrl = serverUrl() ? '' : String(req.body?.baseUrl ?? '').trim();
+    const baseUrl = serverUrl() || (typedUrl ? parseBaseUrl(typedUrl) : saved?.baseUrl || null);
     const instanceName = String(req.body?.instanceName ?? '').trim() || saved?.instanceName || '';
     const apiKey = String(req.body?.apiKey ?? '').trim() || saved?.apiKey || '';
     const result = { reachable: false, keyValid: false, connected: false, message: '' };
 
     if (!baseUrl) {
-      result.message = typedUrl ? 'URL inválida (use http:// ou https://).' : 'Informe a URL do servidor.';
+      result.message = typedUrl
+        ? 'URL inválida (use http:// ou https://).'
+        : 'Informe a URL do servidor.';
       return res.json(result);
     }
     try {
@@ -407,7 +426,10 @@ export function registerEvolutionRoutes(app: Express) {
           email: u.email,
           emailVerified: u.emailVerified,
           instanceName: c?.instanceName || '',
-          serverHost: c?.baseUrl ? new URL(c.baseUrl).host : '',
+          serverHost: (() => {
+            const url = serverUrl() || c?.baseUrl;
+            return url ? new URL(url).host : '';
+          })(),
           createdAt: u.createdAt.toISOString(),
         };
       })

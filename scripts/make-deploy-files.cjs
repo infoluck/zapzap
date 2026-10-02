@@ -71,6 +71,9 @@ SMTP_USER="${pick('SMTP_USER')}"
 SMTP_PASS="${pick('SMTP_PASS')}"
 SMTP_FROM="${pick('SMTP_FROM')}"
 
+# Servidor Evolution para todos os usuários. No Easypanel prefira o endereço INTERNO (projeto_servico:porta).
+EVOLUTION_BASE_URL="http://TROQUE_PROJETO_SERVICO:8080"
+
 `;
 
 fs.writeFileSync(sqlFile, sql);

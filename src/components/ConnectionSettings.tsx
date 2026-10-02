@@ -3,6 +3,8 @@ import { Server, Eye, EyeOff, Save, RefreshCw, CheckCircle2, XCircle, Trash2, In
 
 export interface ConnectionInfo {
   configured: boolean;
+  /** true when the server URL is fixed by the administrator (.env): users only give instance + key */
+  serverManaged: boolean;
   baseUrl: string;
   instanceName: string;
   hasApiKey: boolean;
@@ -41,7 +43,8 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({ connecti
     setApiKey('');
   }, [connection.baseUrl, connection.instanceName, connection.configured]);
 
-  const body = () => JSON.stringify({ baseUrl, instanceName, apiKey });
+  const body = () =>
+    JSON.stringify({ ...(connection.serverManaged ? {} : { baseUrl }), instanceName, apiKey });
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,29 +114,37 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({ connecti
           Configurações da Conexão (Evolution API)
         </h3>
         <p className="text-sm text-gray-500 mt-0.5">
-          Estes dados são só da sua conta: cada usuário configura a própria conexão e conecta o seu WhatsApp.
+          Estes dados são só da sua conta: cada usuário configura a própria instância e conecta o seu WhatsApp.
         </p>
       </div>
 
       <form onSubmit={handleSave} className="space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50 p-5 rounded-xl border border-gray-200">
-          <div>
-            <label htmlFor="conn-url" className={labelClass}>
-              URL base da API (endpoint)
-            </label>
-            <input
-              id="conn-url"
-              type="url"
-              required
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://evolution.seudominio.com"
-              className={inputClass}
-            />
-            <span className="text-[11px] text-gray-500 mt-1 block">Endereço público do seu servidor Evolution.</span>
-          </div>
+          {connection.serverManaged ? (
+            <div className="md:col-span-2 flex items-start gap-2 text-xs text-gray-600 bg-white border border-gray-200 rounded-lg px-3 py-2">
+              <Info className="w-4 h-4 shrink-0 mt-px text-emerald-600" />
+              O servidor da Evolution é definido pelo administrador. Você só precisa informar o nome e a chave da sua
+              instância.
+            </div>
+          ) : (
+            <div>
+              <label htmlFor="conn-url" className={labelClass}>
+                URL base da API (endpoint)
+              </label>
+              <input
+                id="conn-url"
+                type="url"
+                required
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://evolution.seudominio.com"
+                className={inputClass}
+              />
+              <span className="text-[11px] text-gray-500 mt-1 block">Endereço público do seu servidor Evolution.</span>
+            </div>
+          )}
 
-          <div>
+          <div className={connection.serverManaged ? 'md:col-span-2' : ''}>
             <label htmlFor="conn-instance" className={labelClass}>
               Nome da instância
             </label>
