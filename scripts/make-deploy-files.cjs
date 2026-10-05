@@ -57,7 +57,7 @@ NODE_ENV=production
 PORT=3000
 
 # Banco dedicado do ZapZap. Troque HOST_INTERNO pelo "Internal Host" do serviço Postgres no Easypanel.
-DATABASE_URL="postgresql://zapzap_app:${dbPassword}@HOST_INTERNO:5432/zapzap?schema=public&connection_limit=5&pool_timeout=20"
+DATABASE_URL="postgresql://zapzap_app:${dbPassword}@HOST_INTERNO:5432/zapzap?schema=public&connection_limit=3&pool_timeout=20"
 
 # Endereço público do app (https obrigatório: o cookie de sessão só é "secure" com https)
 APP_URL="https://TROQUE-PELO-DOMINIO-DO-APP"

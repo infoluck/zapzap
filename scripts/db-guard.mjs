@@ -58,7 +58,12 @@ export function assertSafe(mode = 'deploy') {
       fail(`em servidor remoto use o usuário dedicado do app (ex.: zapzap_app), nunca "${db.user}".`);
     }
     if (!db.connectionLimit) {
-      fail('inclua "connection_limit" (ex.: ?connection_limit=5) na DATABASE_URL para não esgotar as conexões do servidor compartilhado.');
+      fail('inclua "connection_limit" (ex.: ?connection_limit=3) na DATABASE_URL para não esgotar as conexões do servidor compartilhado.');
+    }
+    const max = Number(process.env.DB_POOL_MAX) || 5;
+    if (!(Number(db.connectionLimit) >= 1) || Number(db.connectionLimit) > max) {
+      // Não bloqueia: o app limita o pool sozinho (src/db/index.ts). Mas a URL deveria refletir isso.
+      console.warn(`⚠️ db-guard: connection_limit=${db.connectionLimit} é inválido ou alto para um servidor compartilhado. O app vai usar no máximo ${max}; ajuste a URL para 2-${max}.`);
     }
   }
   console.log(`✅ db-guard: alvo permitido -> ${where}`);

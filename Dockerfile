@@ -20,5 +20,6 @@ ENV TZ=America/Sao_Paulo
 ENV PORT=3000
 EXPOSE 3000
 
-# Confere o banco alvo, aplica migrations (somente "deploy") e sobe o servidor
-CMD ["npm", "run", "start:prod"]
+# Confere o banco alvo, aplica migrations (somente "deploy", com nova tentativa se o Postgres estiver sem
+# conexões livres) e sobe o servidor. Node como PID 1 repassa SIGTERM para o encerramento limpo.
+CMD ["node", "scripts/start-prod.mjs"]

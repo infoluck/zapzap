@@ -16,7 +16,7 @@
     "db:studio": "node scripts/db-guard.mjs deploy && prisma studio",
     "db:export": "node scripts/export-data.mjs",
     "db:import": "node scripts/import-data.mjs",
-    "start:prod": "node scripts/db-guard.mjs deploy && prisma migrate deploy && node dist/server.cjs"
+    "start:prod": "node scripts/start-prod.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

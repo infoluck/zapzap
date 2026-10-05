@@ -72,7 +72,8 @@ O servidor PostgreSQL de produção **hospeda outros bancos**. Por isso:
 - O ZapZap usa um **banco dedicado `zapzap`** e um **usuário dedicado `zapzap_app`** (sem superusuário, sem criar bancos/usuários, `CONNECTION LIMIT 10`). O app e as migrations **nunca** usam o `postgres`.
 - `scripts/db-guard.mjs` roda antes de `db:deploy`, `db:studio`, `db:import` e `start:prod`: recusa qualquer banco que não se chame `zapzap`, qualquer usuário `postgres` em servidor remoto e URLs sem `connection_limit`.
 - Em servidor remoto só existe `prisma migrate deploy` (via `npm run db:deploy`). `migrate dev` (`npm run db:migrate`) só roda em localhost. **Nunca** rode `migrate reset` ou `db push` contra o servidor.
-- `DATABASE_URL` de produção: `postgresql://zapzap_app:<senha>@<host interno>:5432/zapzap?schema=public&connection_limit=5&pool_timeout=20`.
+- `DATABASE_URL` de produção: `postgresql://zapzap_app:<senha>@<host interno>:5432/zapzap?schema=public&connection_limit=3&pool_timeout=20`.
+- **Conexões:** o Postgres é compartilhado e tem um limite global (`max_connections`). O app abre no máximo 3 conexões (`connection_limit`, teto 5 em `src/db/index.ts`) e as fecha ao receber SIGTERM. O início do container (`scripts/start-prod.mjs`) tenta as migrations de novo, com espera, se o servidor responder `remaining connection slots are reserved...`. Para ver quem usa as conexões: `SELECT usename, datname, state, count(*) FROM pg_stat_activity GROUP BY 1,2,3 ORDER BY 4 DESC;` e `SHOW max_connections;`.
 - Deploy: `Dockerfile` (Node 22). O container executa `npm run start:prod` = guard → `prisma migrate deploy` → servidor. Em produção o Express usa `trust proxy`.
 - Dados: `npm run db:export` gera `deploy/zapzap-data.local.json`; `npm run db:import -- <arquivo>` importa só inserindo (nunca apaga nem sobrescreve) e pode rodar mais de uma vez.
 - Arquivos com segredos (`deploy/`, `.env*`) estão no `.gitignore` e no `.dockerignore`.

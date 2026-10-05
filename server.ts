@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { getDb } from './src/db/index';
+import { getDb, closeDb } from './src/db/index';
 import { registerAuthRoutes, requireAuth, verifyMailerOnStartup } from './src/server/auth';
 import { registerEvolutionRoutes, claimLegacyData } from './src/server/evolution';
 import { isAdminEmail } from './src/server/admin';
@@ -481,7 +481,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
     // Self-check written to the logs: makes deploy problems (SMTP/DB) visible without guessing
     verifyMailerOnStartup();
@@ -489,6 +489,23 @@ async function startServer() {
       .then(() => console.log('✅ Banco de dados ok'))
       .catch((err: any) => console.error(`⛔ Banco de dados indisponível: code=${err?.code ?? '-'} msg=${err?.message}`));
   });
+
+  // Encerramento limpo (redeploy/parada do container): devolve as conexões ao Postgres na hora,
+  // em vez de deixá-las presas até o servidor perceber que o processo morreu.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} recebido: encerrando e fechando conexões com o banco...`);
+    setTimeout(() => process.exit(1), 10_000).unref(); // não trava o redeploy
+    server.close(async () => {
+      await closeDb().catch(() => {});
+      process.exit(0);
+    });
+    server.closeIdleConnections?.();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();
