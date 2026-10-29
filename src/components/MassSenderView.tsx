@@ -77,6 +77,8 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
 
   const [dispatchMode, setDispatchMode] = useState<'immediate' | 'scheduled'>('immediate');
   const [scheduledDateTime, setScheduledDateTime] = useState<string>('');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [onlyPending, setOnlyPending] = useState<boolean>(true);
 
   // Anti-ban settings local state
   const [enableSpinning, setEnableSpinning] = useState<boolean>(
@@ -118,8 +120,32 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
 
   const targetContacts = useMemo(() => {
     if (!targetProfile) return [];
-    return contacts.filter((c) => c.profileIds.includes(targetProfile.id));
-  }, [contacts, targetProfile]);
+    const profileContacts = contacts.filter((c) => c.profileIds.includes(targetProfile.id));
+    return [...profileContacts].sort((a, b) => {
+      const compare = a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' });
+      return sortDirection === 'asc' ? compare : -compare;
+    });
+  }, [contacts, targetProfile, sortDirection]);
+
+  const previousCampaignForProfile = useMemo(() => {
+    if (!targetProfile) return null;
+    return campaigns
+      .filter((campaign) => campaign.targetProfileId === targetProfile.id)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null;
+  }, [campaigns, targetProfile]);
+
+  const sentContactIdsForProfile = useMemo(() => {
+    if (!previousCampaignForProfile) return new Set<string>();
+    return new Set(
+      previousCampaignForProfile.logs
+        .filter((log) => log.status === 'success')
+        .map((log) => log.contactId)
+    );
+  }, [previousCampaignForProfile]);
+
+  const pendingContactsForProfile = useMemo(() => {
+    return targetContacts.filter((contact) => !sentContactIdsForProfile.has(contact.id));
+  }, [targetContacts, sentContactIdsForProfile]);
 
   const getPendingContacts = (logs: CampaignLogItem[] = []) => {
     const sentContactIds = new Set(
@@ -265,6 +291,13 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
       return;
     }
 
+    const campaignContacts = onlyPending ? pendingContactsForProfile : targetContacts;
+
+    if (campaignContacts.length === 0) {
+      alert('Nenhum contato pendente para este perfil. Todos os contatos já foram enviados.');
+      return;
+    }
+
     if (dispatchMode === 'scheduled') {
       if (!scheduledDateTime) {
         alert('Por favor, informe a data e horário para agendamento.');
@@ -278,7 +311,7 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
         selectedTemplateIds,
         scheduledFor: new Date(scheduledDateTime).toISOString(),
         status: 'scheduled',
-        totalContacts: targetContacts.length,
+        totalContacts: campaignContacts.length,
         sentCount: 0,
         failedCount: 0,
         antiBanSettings: {
@@ -333,7 +366,7 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
     setActiveCampaignId(campaignId);
 
     // Trigger sequential sender engine
-    processNextContact(0, campaignId, [], targetContacts);
+    processNextContact(0, campaignId, [], campaignContacts);
   };
 
   const processNextContact = (
@@ -571,15 +604,53 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
                 onChange={(e) => setSelectedProfileId(e.target.value)}
                 className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
               >
-                {profiles.map((p) => {
-                  const count = contacts.filter((c) => c.profileIds.includes(p.id)).length;
-                  return (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({count} contatos vinculados)
-                    </option>
-                  );
-                })}
+                {[...profiles]
+                  .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }))
+                  .map((p) => {
+                    const count = contacts.filter((c) => c.profileIds.includes(p.id)).length;
+                    return (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({count} contatos vinculados)
+                      </option>
+                    );
+                  })}
               </select>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-gray-700">
+                <span className="font-semibold uppercase tracking-wider">Ordem dos contatos:</span>
+                <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                  <button
+                    type="button"
+                    onClick={() => setSortDirection('asc')}
+                    className={`px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer ${
+                      sortDirection === 'asc' ? 'bg-emerald-600 text-white' : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    A → Z
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortDirection('desc')}
+                    className={`px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer ${
+                      sortDirection === 'desc' ? 'bg-emerald-600 text-white' : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    Z → A
+                  </button>
+                </div>
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={onlyPending}
+                  onChange={(e) => setOnlyPending(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                Enviar somente não enviados
+              </label>
             </div>
 
             {targetContacts.length === 0 ? (
@@ -587,14 +658,21 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
                 ⚠️ Este perfil ainda não possui contatos. Vá para a aba &ldquo;Perfis &amp; Vínculo&rdquo; para vincular contatos a este perfil.
               </p>
             ) : (
-              <div className="text-xs text-gray-600 bg-gray-50 p-3 rounded-lg flex items-center justify-between">
+              <div className="text-xs text-gray-600 bg-gray-50 p-3 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <span>
                   Disparo direcionado para:{' '}
                   <strong className="text-gray-900">{targetProfile?.name}</strong>
                 </span>
-                <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Lista pronta ({targetContacts.length})
-                </span>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Lista pronta ({onlyPending ? pendingContactsForProfile.length : targetContacts.length})
+                  </span>
+                  {sentContactIdsForProfile.size > 0 && (
+                    <span className="text-amber-700 font-semibold">
+                      {sentContactIdsForProfile.size} já enviados
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>
