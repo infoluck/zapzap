@@ -40,6 +40,7 @@ interface MassSenderViewProps {
   profiles: ContactProfile[];
   contacts: Contact[];
   templates: MessageTemplate[];
+  campaigns: Campaign[];
   antiBanSettings: AntiBanSettings;
   onSaveAntiBanSettings: (settings: AntiBanSettings) => void;
   onSaveCampaign: (campaign: Campaign) => void;
@@ -54,6 +55,7 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
   profiles,
   contacts,
   templates,
+  campaigns,
   antiBanSettings,
   onSaveAntiBanSettings,
   onSaveCampaign,
@@ -119,9 +121,82 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
     return contacts.filter((c) => c.profileIds.includes(targetProfile.id));
   }, [contacts, targetProfile]);
 
+  const getPendingContacts = (logs: CampaignLogItem[] = []) => {
+    const sentContactIds = new Set(
+      logs.filter((log) => log.status === 'success').map((log) => log.contactId)
+    );
+    return targetContacts.filter((contact) => !sentContactIds.has(contact.id));
+  };
+
+  const buildCampaignPayload = (
+    campaignId: string,
+    logs: CampaignLogItem[],
+    status: Campaign['status'],
+    createdAtOverride?: string
+  ): Campaign => ({
+    id: campaignId,
+    name: campaignName.trim(),
+    targetProfileId: targetProfile.id,
+    selectedTemplateIds,
+    scheduledFor: null,
+    status,
+    totalContacts: targetContacts.length,
+    sentCount: logs.filter((l) => l.status === 'success').length,
+    failedCount: logs.filter((l) => l.status === 'failed').length,
+    antiBanSettings: {
+      enableMessageSpinning: enableSpinning,
+      enableSpintax,
+      enableZeroWidthNoise: enableZeroWidth,
+      minDelaySeconds: minDelay,
+      maxDelaySeconds: maxDelay,
+      batchSize,
+      batchPauseMinutes: 2,
+      simulateTyping: true,
+    },
+    logs,
+    createdAt: createdAtOverride ?? new Date().toISOString(),
+  });
+
   const selectedTemplates = useMemo(() => {
     return templates.filter((t) => selectedTemplateIds.includes(t.id));
   }, [templates, selectedTemplateIds]);
+
+  useEffect(() => {
+    if (isExecuting || !targetProfile) return;
+
+    const resumedCampaign = campaigns
+      .filter((campaign) => campaign.targetProfileId === targetProfile.id)
+      .filter((campaign) => campaign.status === 'running' || campaign.status === 'paused')
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+    if (!resumedCampaign) return;
+
+    const pendingContacts = getPendingContacts(resumedCampaign.logs);
+    if (pendingContacts.length === 0) {
+      const completedCampaign = buildCampaignPayload(
+        resumedCampaign.id,
+        resumedCampaign.logs,
+        'completed',
+        resumedCampaign.createdAt
+      );
+      onSaveCampaign(completedCampaign);
+      return;
+    }
+
+    const shouldResume = window.confirm(
+      `Foi encontrado um disparo em andamento para o perfil "${targetProfile.name}". Deseja retomar os ${pendingContacts.length} contatos pendentes?`
+    );
+
+    if (!shouldResume) return;
+
+    setCampaignName(resumedCampaign.name || campaignName);
+    setIsExecuting(true);
+    setIsPaused(false);
+    setCurrentContactIndex(0);
+    setActiveLogs(resumedCampaign.logs);
+    setActiveCampaignId(resumedCampaign.id);
+    processNextContact(0, resumedCampaign.id, resumedCampaign.logs, pendingContacts);
+  }, [campaigns, targetProfile, isExecuting]);
 
   // Toggle template selection
   const handleToggleTemplate = (templateId: string) => {
@@ -225,6 +300,29 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
       return;
     }
 
+    const existingRunningCampaign = campaigns
+      .filter((campaign) => campaign.targetProfileId === targetProfile.id)
+      .filter((campaign) => campaign.status === 'running' || campaign.status === 'paused')
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+    if (existingRunningCampaign) {
+      const pendingContacts = getPendingContacts(existingRunningCampaign.logs);
+      if (pendingContacts.length === 0) {
+        alert('Todos os contatos deste perfil já foram enviados nesta campanha.');
+        return;
+      }
+
+      handleSaveSettings();
+      setIsExecuting(true);
+      setIsPaused(false);
+      setCurrentContactIndex(0);
+      setActiveLogs(existingRunningCampaign.logs);
+      setActiveCampaignId(existingRunningCampaign.id);
+      alert(`Retomando disparo com ${pendingContacts.length} contatos pendentes.`);
+      processNextContact(0, existingRunningCampaign.id, existingRunningCampaign.logs, pendingContacts);
+      return;
+    }
+
     // Immediate Execution
     handleSaveSettings();
     setIsExecuting(true);
@@ -235,22 +333,22 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
     setActiveCampaignId(campaignId);
 
     // Trigger sequential sender engine
-    processNextContact(0, campaignId, []);
+    processNextContact(0, campaignId, [], targetContacts);
   };
 
   const processNextContact = (
     index: number,
     campaignId: string,
-    currentLogs: CampaignLogItem[]
+    currentLogs: CampaignLogItem[],
+    contactQueue: Contact[] = targetContacts
   ) => {
-    if (index >= targetContacts.length) {
-      // Completed!
+    if (index >= contactQueue.length) {
       finishCampaign(campaignId, currentLogs, 'completed');
       return;
     }
 
     setCurrentContactIndex(index);
-    const contact = targetContacts[index];
+    const contact = contactQueue[index];
 
     // Generate merged obfuscated message
     const { message, templateTitle } = generateMergedMessage(
@@ -314,9 +412,18 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
         const updatedLogs = [...currentLogs, logItem];
         setActiveLogs(updatedLogs);
 
+        onSaveCampaign(
+          buildCampaignPayload(
+            campaignId,
+            updatedLogs,
+            'running',
+            campaigns.find((campaign) => campaign.id === campaignId)?.createdAt ?? new Date().toISOString()
+          )
+        );
+
         // Process next if not cancelled
         if (isExecutingRef.current) {
-          processNextContact(index + 1, campaignId, updatedLogs);
+          processNextContact(index + 1, campaignId, updatedLogs, contactQueue);
         }
       }
     }, 1000);
@@ -335,35 +442,19 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
       clearInterval(executionIntervalRef.current);
     }
 
-    const campaign: Campaign = {
-      id: campaignId,
-      name: campaignName.trim(),
-      targetProfileId: targetProfile.id,
-      selectedTemplateIds,
-      scheduledFor: null,
-      status,
-      totalContacts: targetContacts.length,
-      sentCount: logs.filter((l) => l.status === 'success').length,
-      failedCount: logs.filter((l) => l.status === 'failed').length,
-      antiBanSettings: {
-        enableMessageSpinning: enableSpinning,
-        enableSpintax,
-        enableZeroWidthNoise: enableZeroWidth,
-        minDelaySeconds: minDelay,
-        maxDelaySeconds: maxDelay,
-        batchSize,
-        batchPauseMinutes: 2,
-        simulateTyping: true,
-      },
-      logs,
-      createdAt: new Date().toISOString(),
-    };
-
+    const createdAt = campaigns.find((campaign) => campaign.id === campaignId)?.createdAt ?? new Date().toISOString();
+    const campaign = buildCampaignPayload(campaignId, logs, status, createdAt);
     onSaveCampaign(campaign);
   };
 
   const handlePauseResume = () => {
-    setIsPaused((prev) => !prev);
+    const nextPausedState = !isPaused;
+    setIsPaused(nextPausedState);
+
+    if (activeCampaignId) {
+      const nextStatus: Campaign['status'] = nextPausedState ? 'paused' : 'running';
+      onSaveCampaign(buildCampaignPayload(activeCampaignId, activeLogs, nextStatus, campaigns.find((campaign) => campaign.id === activeCampaignId)?.createdAt ?? new Date().toISOString()));
+    }
   };
 
   const handleCancelExecution = () => {
@@ -868,17 +959,27 @@ export const MassSenderView: React.FC<MassSenderViewProps> = ({
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-bold text-gray-700">
                 <span>
-                  Progresso: {activeLogs.length} de {targetContacts.length} contatos enviados
+                  Progresso: {activeLogs.filter((log) => log.status === 'success').length} enviados •{' '}
+                  {activeLogs.filter((log) => log.status === 'failed').length} falhas •{' '}
+                  {Math.max(targetContacts.length - activeLogs.length, 0)} pendentes
                 </span>
                 <span>
-                  {Math.round((activeLogs.length / (targetContacts.length || 1)) * 100)}%
+                  {Math.round(
+                    ((activeLogs.filter((log) => log.status === 'success').length) /
+                      (targetContacts.length || 1)) *
+                      100
+                  )}%
                 </span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
                 <div
                   className="bg-emerald-600 h-3 rounded-full transition-all duration-300"
                   style={{
-                    width: `${(activeLogs.length / (targetContacts.length || 1)) * 100}%`,
+                    width: `${
+                      (activeLogs.filter((log) => log.status === 'success').length /
+                        (targetContacts.length || 1)) *
+                      100
+                    }%`,
                   }}
                 />
               </div>

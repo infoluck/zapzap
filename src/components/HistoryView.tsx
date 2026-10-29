@@ -20,6 +20,7 @@ interface HistoryViewProps {
   profiles: ContactProfile[];
   onDeleteCampaign: (id: string) => void;
   onNewCampaign: () => void;
+  onResumeCampaign?: (profileId: string) => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -27,6 +28,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   profiles,
   onDeleteCampaign,
   onNewCampaign,
+  onResumeCampaign,
 }) => {
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
 
@@ -54,6 +56,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <Clock className="w-3.5 h-3.5 animate-spin" /> Em Execução
           </span>
         );
+      case 'paused':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-800">
+            <Clock className="w-3.5 h-3.5" /> Pausado
+          </span>
+        );
       case 'cancelled':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
@@ -67,6 +75,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           </span>
         );
     }
+  };
+
+  const getCampaignSummary = (camp: Campaign) => {
+    const success = camp.logs.filter((log) => log.status === 'success').length;
+    const failed = camp.logs.filter((log) => log.status === 'failed').length;
+    const pending = Math.max(camp.totalContacts - success - failed, 0);
+    return { success, failed, pending };
   };
 
   if (selectedCampaign) {
@@ -96,22 +111,34 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={() => {
-              if (confirm('Deseja excluir o registro desta campanha?')) {
-                onDeleteCampaign(selectedCampaign.id);
-                setSelectedCampaign(null);
-              }
-            }}
-            className="text-gray-400 hover:text-red-600 p-2 rounded-lg cursor-pointer"
-            title="Excluir campanha"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {selectedCampaign.status === 'running' || selectedCampaign.status === 'paused' ? (
+              <button
+                onClick={() => {
+                  onResumeCampaign?.(selectedCampaign.targetProfileId);
+                }}
+                className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                Retomar pendentes
+              </button>
+            ) : null}
+            <button
+              onClick={() => {
+                if (confirm('Deseja excluir o registro desta campanha?')) {
+                  onDeleteCampaign(selectedCampaign.id);
+                  setSelectedCampaign(null);
+                }
+              }}
+              className="text-gray-400 hover:text-red-600 p-2 rounded-lg cursor-pointer"
+              title="Excluir campanha"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Campaign Metrics */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
             <span className="text-xs text-gray-500 font-semibold uppercase">Total de Contatos</span>
             <div className="text-xl font-bold text-gray-900 mt-1">
@@ -119,9 +146,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             </div>
           </div>
           <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
-            <span className="text-xs text-gray-500 font-semibold uppercase">Entregas com Sucesso</span>
+            <span className="text-xs text-gray-500 font-semibold uppercase">Entregues</span>
             <div className="text-xl font-bold text-emerald-600 mt-1">
-              {selectedCampaign.sentCount}
+              {getCampaignSummary(selectedCampaign).success}
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+            <span className="text-xs text-gray-500 font-semibold uppercase">Pendentes</span>
+            <div className="text-xl font-bold text-amber-600 mt-1">
+              {getCampaignSummary(selectedCampaign).pending}
             </div>
           </div>
           <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
@@ -238,7 +271,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   <span>{camp.totalContacts} destinatários</span>
                   <span>•</span>
                   <span className="text-emerald-700 font-semibold">
-                    {camp.sentCount} entregues
+                    {getCampaignSummary(camp).success} entregues
+                  </span>
+                  <span>•</span>
+                  <span className="text-amber-700 font-semibold">
+                    {getCampaignSummary(camp).pending} pendentes
                   </span>
                   <span>•</span>
                   <span>{new Date(camp.createdAt).toLocaleDateString('pt-BR')}</span>
@@ -246,6 +283,17 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               </div>
 
               <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                {(camp.status === 'running' || camp.status === 'paused') && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onResumeCampaign?.(camp.targetProfileId);
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[10px] font-bold cursor-pointer"
+                  >
+                    Retomar pendentes
+                  </button>
+                )}
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

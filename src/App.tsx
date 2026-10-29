@@ -254,6 +254,12 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
     setActiveTab('disparos');
   };
 
+  const handleResumeCampaign = (profileId: string) => {
+    setPreselectedProfileId(profileId);
+    setPreselectedTemplateId(undefined);
+    setActiveTab('disparos');
+  };
+
   // Contact sync with connected WhatsApp instance
   const handleSyncWhatsAppContacts = async (): Promise<{ count: number; message: string }> => {
     setIsSyncingContacts(true);
@@ -426,6 +432,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
             profiles={profiles}
             contacts={contacts}
             templates={templates}
+            campaigns={campaigns}
             antiBanSettings={antiBanSettings}
             onSaveAntiBanSettings={handleSaveAntiBanSettings}
             onSaveCampaign={handleSaveCampaign}
@@ -457,6 +464,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
             profiles={profiles}
             onDeleteCampaign={handleDeleteCampaign}
             onNewCampaign={() => setActiveTab('disparos')}
+            onResumeCampaign={handleResumeCampaign}
           />
         )}
       </main>
